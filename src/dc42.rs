@@ -23,7 +23,8 @@
 //! module preserves them verbatim so that an open/save cycle is byte-identical.
 
 use crate::error::{MfsError, Result};
-use crate::util::{rd_u32, wr_u32};
+use binrw::{BinRead, BinWrite, binrw};
+use std::io::Cursor;
 
 /// Size of the DiskCopy 4.2 header that precedes the disk data.
 pub(crate) const HEADER_LEN: usize = 84;
@@ -31,14 +32,12 @@ pub(crate) const HEADER_LEN: usize = 84;
 /// Maximum number of bytes in the header's Pascal-string image name.
 const MAX_NAME_LEN: usize = 63;
 
-// Header field offsets.
-const OFF_DATA_SIZE: usize = 64;
-const OFF_TAG_SIZE: usize = 68;
-const OFF_DATA_CKSUM: usize = 72;
-const OFF_TAG_CKSUM: usize = 76;
-const OFF_DISK_FORMAT: usize = 80;
-const OFF_FORMAT_BYTE: usize = 81;
-const OFF_MAGIC: usize = 82;
+/// The value every DiskCopy 4.2 header carries in its trailing `magic` field.
+const MAGIC: u16 = 0x0100;
+
+/// Where `magic` sits inside the header. Used only to point at the offending
+/// bytes in the error message; the layout itself lives in [`Dc42Header`].
+const MAGIC_OFFSET: usize = 82;
 
 /// The number of leading tag bytes excluded from `tagChecksum`.
 ///
@@ -54,6 +53,44 @@ const TAG_BYTES_PER_SECTOR: usize = 12;
 const SIZE_400K: usize = 409_600;
 /// Bytes in an 800K floppy image.
 const SIZE_800K: usize = 819_200;
+
+/// The 84-byte DiskCopy 4.2 header, field-for-field as stored on disk.
+///
+/// The declaration below *is* the layout: fields appear in on-disk order and
+/// [`binrw`] reads and writes them big-endian, so the offsets in the table at the
+/// top of this module are a consequence of the field order rather than something
+/// maintained by hand. Semantic validation is deliberately not expressed as
+/// `assert` attributes — it lives in [`validate_header`], which returns a plain
+/// `String` so [`Dc42Image::detect`] can run the same checks without minting an
+/// error.
+#[binrw]
+#[brw(big)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Dc42Header {
+    /// Image name length @0 — the Pascal length byte, at most [`MAX_NAME_LEN`].
+    pub name_len: u8,
+    /// Image name @1 — the Pascal string's content bytes, zero padded to a
+    /// fixed 63; only the first `name_len` of them are meaningful.
+    pub name: [u8; MAX_NAME_LEN],
+    /// `dataSize` @64 — bytes of disk data following the header.
+    pub data_size: u32,
+    /// `tagSize` @68 — bytes of tag data following the disk data. May be zero.
+    pub tag_size: u32,
+    /// `dataChecksum` @72 — [`checksum`] over the disk data.
+    pub data_cksum: u32,
+    /// `tagChecksum` @76 — [`tag_checksum`] over the tag data.
+    pub tag_cksum: u32,
+    /// `diskFormat` @80 — 0 = 400K, 1 = 800K, 2 = 720K, 3 = 1440K.
+    pub disk_format: u8,
+    /// `formatByte` @81 — 0x02 = 400K, 0x22 = >400K Mac, 0x24 = 720K/1440K.
+    pub format_byte: u8,
+    /// `magic` @82 — always [`MAGIC`].
+    ///
+    /// A plain field rather than a `#[brw(magic = ...)]` directive: that
+    /// directive matches a signature at the *start* of a struct, and DiskCopy
+    /// puts its magic last. The value is checked in [`validate_header`].
+    pub magic: u16,
+}
 
 /// A parsed DiskCopy 4.2 container.
 pub(crate) struct Dc42Image {
@@ -106,32 +143,38 @@ fn tag_checksum(tags: &[u8]) -> u32 {
 }
 
 /// Validates the structural invariants shared by [`Dc42Image::detect`] and
-/// [`Dc42Image::parse`], returning the data and tag sizes as `usize`.
+/// [`Dc42Image::parse`], returning the decoded header along with the data and
+/// tag sizes as `usize`.
 ///
 /// The size arithmetic is done in `u64` so that a hostile header claiming a
 /// 4 GB data size cannot wrap around into a plausible-looking total.
-fn validate_header(bytes: &[u8]) -> std::result::Result<(usize, usize), String> {
+fn validate_header(bytes: &[u8]) -> std::result::Result<(Dc42Header, usize, usize), String> {
     if bytes.len() < HEADER_LEN {
         return Err(format!(
             "image is {} bytes, shorter than the {HEADER_LEN}-byte header",
             bytes.len()
         ));
     }
-    if bytes[OFF_MAGIC] != 0x01 || bytes[OFF_MAGIC + 1] != 0x00 {
+    // The length check above makes this read infallible; anything past the
+    // header belongs to the disk and tag data.
+    let header = Dc42Header::read(&mut Cursor::new(&bytes[..HEADER_LEN]))
+        .map_err(|e| format!("cannot read the DiskCopy header: {e}"))?;
+
+    if header.magic != MAGIC {
         return Err(format!(
-            "bad magic {:#04x}{:02x} at offset {OFF_MAGIC} (expected 0x0100)",
-            bytes[OFF_MAGIC],
-            bytes[OFF_MAGIC + 1]
+            "bad magic {:#04x}{:02x} at offset {MAGIC_OFFSET} (expected {MAGIC:#06x})",
+            (header.magic >> 8) as u8,
+            header.magic as u8
         ));
     }
-    let name_len = bytes[0] as usize;
+    let name_len = header.name_len as usize;
     if name_len > MAX_NAME_LEN {
         return Err(format!(
             "image name length {name_len} exceeds the {MAX_NAME_LEN}-byte maximum"
         ));
     }
-    let data_size = rd_u32(bytes, OFF_DATA_SIZE) as u64;
-    let tag_size = rd_u32(bytes, OFF_TAG_SIZE) as u64;
+    let data_size = header.data_size as u64;
+    let tag_size = header.tag_size as u64;
     let expected = HEADER_LEN as u64 + data_size + tag_size;
     if expected != bytes.len() as u64 {
         return Err(format!(
@@ -141,7 +184,7 @@ fn validate_header(bytes: &[u8]) -> std::result::Result<(usize, usize), String> 
         ));
     }
     // The equality above proves both sizes fit in usize.
-    Ok((data_size as usize, tag_size as usize))
+    Ok((header, data_size as usize, tag_size as usize))
 }
 
 impl Dc42Image {
@@ -158,21 +201,22 @@ impl Dc42Image {
 
     /// Parses a DiskCopy 4.2 container, verifying both checksums.
     pub(crate) fn parse(bytes: &[u8]) -> Result<Self> {
-        let (data_size, tag_size) = validate_header(bytes).map_err(MfsError::Dc42)?;
+        let (header, data_size, tag_size) = validate_header(bytes).map_err(MfsError::Dc42)?;
 
-        let name_len = bytes[0] as usize;
-        let name = bytes[1..1 + name_len].to_vec();
+        // Only the Pascal string's content is kept; the zero padding after it is
+        // regenerated on write rather than preserved.
+        let name = header.name[..header.name_len as usize].to_vec();
         let data = bytes[HEADER_LEN..HEADER_LEN + data_size].to_vec();
         let tags = bytes[HEADER_LEN + data_size..HEADER_LEN + data_size + tag_size].to_vec();
 
-        let want_data = rd_u32(bytes, OFF_DATA_CKSUM);
+        let want_data = header.data_cksum;
         let got_data = checksum(&data);
         if want_data != got_data {
             return Err(MfsError::Dc42(format!(
                 "data checksum mismatch: header says {want_data:#010x}, computed {got_data:#010x}"
             )));
         }
-        let want_tag = rd_u32(bytes, OFF_TAG_CKSUM);
+        let want_tag = header.tag_cksum;
         let got_tag = tag_checksum(&tags);
         if want_tag != got_tag {
             return Err(MfsError::Dc42(format!(
@@ -184,29 +228,36 @@ impl Dc42Image {
             name,
             data,
             tags,
-            disk_format: bytes[OFF_DISK_FORMAT],
-            format_byte: bytes[OFF_FORMAT_BYTE],
+            disk_format: header.disk_format,
+            format_byte: header.format_byte,
         })
     }
 
     /// Serializes the container, recomputing both checksums from the current
     /// data and tags.
     pub(crate) fn to_bytes(&self) -> Vec<u8> {
-        let mut out = vec![0u8; HEADER_LEN];
-
+        // Names longer than the Pascal string can hold are truncated; the rest
+        // of the fixed-width field is zero padding.
         let name_len = self.name.len().min(MAX_NAME_LEN);
-        out[0] = name_len as u8;
-        out[1..1 + name_len].copy_from_slice(&self.name[..name_len]);
+        let mut name = [0u8; MAX_NAME_LEN];
+        name[..name_len].copy_from_slice(&self.name[..name_len]);
 
-        wr_u32(&mut out, OFF_DATA_SIZE, self.data.len() as u32);
-        wr_u32(&mut out, OFF_TAG_SIZE, self.tags.len() as u32);
-        wr_u32(&mut out, OFF_DATA_CKSUM, checksum(&self.data));
-        wr_u32(&mut out, OFF_TAG_CKSUM, tag_checksum(&self.tags));
-        out[OFF_DISK_FORMAT] = self.disk_format;
-        out[OFF_FORMAT_BYTE] = self.format_byte;
-        out[OFF_MAGIC] = 0x01;
-        out[OFF_MAGIC + 1] = 0x00;
+        let header = Dc42Header {
+            name_len: name_len as u8,
+            name,
+            data_size: self.data.len() as u32,
+            tag_size: self.tags.len() as u32,
+            data_cksum: checksum(&self.data),
+            tag_cksum: tag_checksum(&self.tags),
+            disk_format: self.disk_format,
+            format_byte: self.format_byte,
+            magic: MAGIC,
+        };
 
+        let mut out = Vec::with_capacity(HEADER_LEN + self.data.len() + self.tags.len());
+        header
+            .write(&mut Cursor::new(&mut out))
+            .expect("the header is fixed-size and the sink is a Vec, so this write cannot fail");
         out.extend_from_slice(&self.data);
         out.extend_from_slice(&self.tags);
         out
@@ -255,6 +306,21 @@ mod tests {
             v.push(x as u8);
         }
         v
+    }
+
+    /// Decodes the header of a serialized image, so tests can inspect header
+    /// fields without repeating the offsets [`Dc42Header`] already declares.
+    fn header_of(bytes: &[u8]) -> Dc42Header {
+        Dc42Header::read(&mut Cursor::new(&bytes[..HEADER_LEN])).unwrap()
+    }
+
+    /// Rewrites the header of a serialized image in place.
+    fn patch_header(bytes: &mut [u8], f: impl FnOnce(&mut Dc42Header)) {
+        let mut header = header_of(bytes);
+        f(&mut header);
+        header
+            .write(&mut Cursor::new(&mut bytes[..HEADER_LEN]))
+            .unwrap();
     }
 
     #[test]
@@ -336,7 +402,7 @@ mod tests {
 
         // Bad magic.
         let mut bad_magic = good.clone();
-        bad_magic[OFF_MAGIC + 1] = 0x01;
+        bad_magic[MAGIC_OFFSET + 1] = 0x01;
         assert!(!Dc42Image::detect(&bad_magic));
 
         // Right magic, wrong size arithmetic.
@@ -351,8 +417,10 @@ mod tests {
 
         // A declared data size that would overflow 32-bit addition.
         let mut overflow = good.clone();
-        wr_u32(&mut overflow, OFF_DATA_SIZE, u32::MAX);
-        wr_u32(&mut overflow, OFF_TAG_SIZE, u32::MAX);
+        patch_header(&mut overflow, |h| {
+            h.data_size = u32::MAX;
+            h.tag_size = u32::MAX;
+        });
         assert!(!Dc42Image::detect(&overflow));
     }
 
@@ -391,8 +459,8 @@ mod tests {
 
         let bytes_a = a.to_bytes();
         let bytes_b = b.to_bytes();
-        let cksum_a = rd_u32(&bytes_a, OFF_TAG_CKSUM);
-        let cksum_b = rd_u32(&bytes_b, OFF_TAG_CKSUM);
+        let cksum_a = header_of(&bytes_a).tag_cksum;
+        let cksum_b = header_of(&bytes_b).tag_cksum;
         assert_eq!(cksum_a, cksum_b, "first sector's tags must not be checksummed");
         assert_ne!(cksum_a, 0, "the rest of the tags must be checksummed");
 
@@ -407,8 +475,9 @@ mod tests {
         img.tags.clear();
         let bytes = img.to_bytes();
         assert_eq!(bytes.len(), HEADER_LEN + SIZE_400K);
-        assert_eq!(rd_u32(&bytes, OFF_TAG_SIZE), 0);
-        assert_eq!(rd_u32(&bytes, OFF_TAG_CKSUM), 0);
+        let header = header_of(&bytes);
+        assert_eq!(header.tag_size, 0);
+        assert_eq!(header.tag_cksum, 0);
         assert!(Dc42Image::detect(&bytes));
         let back = Dc42Image::parse(&bytes).unwrap();
         assert!(back.tags.is_empty());
