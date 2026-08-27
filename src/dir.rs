@@ -28,9 +28,11 @@
 //! | 46  | `flMdDat`       | 4    |
 //! | 50  | name length     | 1    |
 //! | 51  | name bytes      | n    |
+//! | 51+n| zero pad        | 0..1 |
 
 use crate::error::{MfsError, Result};
-use crate::util::{rd_u16, rd_u32, wr_u16, wr_u32};
+use binrw::{BinRead, BinWrite, binrw};
+use std::io::Cursor;
 
 /// Logical sector size; directory entries are packed into sectors of this size.
 pub(crate) const SECTOR: usize = 512;
@@ -46,27 +48,63 @@ const FLAG_LOCKED: u8 = 0x01;
 
 /// A directory entry exactly as stored on disk.
 ///
+/// The declaration below *is* the layout: fields appear in on-disk order and
+/// [`binrw`] reads and writes them big-endian, so the offsets in the table above
+/// are a consequence of the field order rather than something maintained by hand.
+///
 /// Every field — including ones this crate never interprets (`version`, `pos`,
 /// `fldr_num`) — is kept verbatim so that open→save round-trips byte-identically.
+///
+/// Read and write must both start at stream position 0 of the entry, because the
+/// trailing even-padding is expressed as `align_after` (which is relative to the
+/// stream, not to the field). [`parse_directory`] and [`write_directory`] give
+/// every entry its own [`Cursor`] over exactly [`RawEntry::entry_len`] bytes.
+#[binrw]
+#[brw(big)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct RawEntry {
+    /// `flFlags` @0 — bit 7 in use, bit 0 locked.
     pub flags: u8,
+    /// `flVersion` @1 — always zero in practice. Stored verbatim.
     pub version: u8,
+    /// `flTyp` @2 — Finder type code.
     pub type_code: [u8; 4],
+    /// `flCr` @6 — Finder creator code.
     pub creator: [u8; 4],
+    /// `flFndrFlags` @10 — Finder flags.
     pub fndr_flags: u16,
+    /// `flPos` @12 — Finder icon position. Stored verbatim.
     pub pos: u32,
+    /// `flFldrNum` @16 — Finder folder number. Stored verbatim.
     pub fldr_num: u16,
+    /// `flFNum` @18 — file number.
     pub fnum: u32,
+    /// `flDFStBlk` @22 — first allocation block of the data fork.
     pub df_st_blk: u16,
+    /// `flDFLogLen` @24 — data fork logical length in bytes.
     pub df_log_len: u32,
+    /// `flDFAllocLen` @28 — data fork allocated length in bytes.
     pub df_alloc_len: u32,
+    /// `flRFStBlk` @32 — first allocation block of the resource fork.
     pub rf_st_blk: u16,
+    /// `flRFLogLen` @34 — resource fork logical length in bytes.
     pub rf_log_len: u32,
+    /// `flRFAllocLen` @38 — resource fork allocated length in bytes.
     pub rf_alloc_len: u32,
+    /// `flCrDat` @42 — creation date (1904 epoch).
     pub cr_dat: u32,
+    /// `flMdDat` @46 — last modification date (1904 epoch).
     pub md_dat: u32,
-    /// Raw MacRoman name bytes, without the leading Pascal length byte.
+    /// Name length @50 — derived from `name`, never stored on the struct.
+    #[br(temp)]
+    #[bw(try_calc(u8::try_from(name.len())))]
+    name_len: u8,
+    /// Raw MacRoman name bytes @51, without the leading Pascal length byte.
+    ///
+    /// The `align_after` rounds the entry up to an even length: zero or one pad
+    /// byte, skipped on read and written as zero.
+    #[br(count = usize::from(name_len))]
+    #[brw(align_after = 2)]
     pub name: Vec<u8>,
 }
 
@@ -117,26 +155,9 @@ pub(crate) fn parse_directory(region: &[u8]) -> Result<Vec<RawEntry>> {
                     "directory entry overruns sector".to_string(),
                 ));
             }
-            let e = &sector[pos..pos + len];
-            entries.push(RawEntry {
-                flags: e[0],
-                version: e[1],
-                type_code: [e[2], e[3], e[4], e[5]],
-                creator: [e[6], e[7], e[8], e[9]],
-                fndr_flags: rd_u16(e, 10),
-                pos: rd_u32(e, 12),
-                fldr_num: rd_u16(e, 16),
-                fnum: rd_u32(e, 18),
-                df_st_blk: rd_u16(e, 22),
-                df_log_len: rd_u32(e, 24),
-                df_alloc_len: rd_u32(e, 28),
-                rf_st_blk: rd_u16(e, 32),
-                rf_log_len: rd_u32(e, 34),
-                rf_alloc_len: rd_u32(e, 38),
-                cr_dat: rd_u32(e, 42),
-                md_dat: rd_u32(e, 46),
-                name: e[51..51 + name_len].to_vec(),
-            });
+            // Bounded to this entry so position 0 of the cursor is the entry's
+            // first byte, which is what the `align_after` padding relies on.
+            entries.push(RawEntry::read(&mut Cursor::new(&sector[pos..pos + len]))?);
             pos += len;
         }
     }
@@ -195,27 +216,14 @@ pub(crate) fn write_directory(entries: &[RawEntry], region: &mut [u8]) -> Result
     region.fill(0);
     for (e, &start) in entries.iter().zip(offsets.iter()) {
         let len = e.entry_len();
-        let out = &mut region[start..start + len];
         // An entry is only reachable by the parser with bit 7 set.
-        out[0] = e.flags | FLAG_IN_USE;
-        out[1] = e.version;
-        out[2..6].copy_from_slice(&e.type_code);
-        out[6..10].copy_from_slice(&e.creator);
-        wr_u16(out, 10, e.fndr_flags);
-        wr_u32(out, 12, e.pos);
-        wr_u16(out, 16, e.fldr_num);
-        wr_u32(out, 18, e.fnum);
-        wr_u16(out, 22, e.df_st_blk);
-        wr_u32(out, 24, e.df_log_len);
-        wr_u32(out, 28, e.df_alloc_len);
-        wr_u16(out, 32, e.rf_st_blk);
-        wr_u32(out, 34, e.rf_log_len);
-        wr_u32(out, 38, e.rf_alloc_len);
-        wr_u32(out, 42, e.cr_dat);
-        wr_u32(out, 46, e.md_dat);
-        out[50] = e.name.len() as u8;
-        out[51..51 + e.name.len()].copy_from_slice(&e.name);
-        // Bytes 51+name_len..len (at most one) stay zero from the fill above.
+        let mut e = e.clone();
+        e.flags |= FLAG_IN_USE;
+        // Bounded to this entry so position 0 of the cursor is the entry's
+        // first byte, which is what the `align_after` padding relies on; the
+        // pad byte it emits is zero, matching the fill above.
+        e.write(&mut Cursor::new(&mut region[start..start + len]))
+            .expect("plan() sized the region and bounded the name to a u8, so this cannot fail");
     }
     Ok(())
 }
