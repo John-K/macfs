@@ -6,6 +6,7 @@ rust-version = "1.87"
 description = "Read/write MFS (Macintosh File System) 400K/800K disk images, raw or DiskCopy 4.2"
 license = "MIT OR Apache-2.0"
 readme = "README.md"
+repository = "https://github.com/John-K/macfs"
 documentation = "https://docs.rs/macfs"
 keywords = ["mfs", "macintosh", "disk-image", "diskcopy", "retrocomputing"]
 categories = ["filesystem", "parser-implementations", "emulators", "command-line-utilities"]
