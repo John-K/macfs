@@ -64,6 +64,32 @@ which are copyrighted and not distributed with the crate; run
 `MACFS_REQUIRE_GOLDEN=1` to make their absence a test failure instead of a
 skip. See `TESTING.md` for details.
 
+## Resources
+
+Format documentation:
+
+- *Inside Macintosh*, Volume II, "The File Manager" (Apple, 1985) — the MFS
+  on-disk structures: master directory block, file directory, and the 12-bit
+  allocation block map. Field names in the source (`drSigWord`, `flFndrFlags`,
+  …) follow its nomenclature.
+- [MFSLives](https://github.com/sp1ke23/MFSLives) — Apple's MFS sample code, a
+  reference implementation of the format.
+- The DiskCopy 4.2 container layout and its checksum algorithm — including the
+  undocumented but universal quirk that `tagChecksum` skips the first sector's
+  12 tag bytes — were matched against real images produced by Apple's Disk
+  Copy.
+
+Golden test images (fetched by `scripts/fetch-test-images.sh`; provenance and
+license notes in [TESTING.md](TESTING.md)):
+
+- `Sample.img` from the [MFSLives](https://github.com/sp1ke23/MFSLives) repo —
+  Apple's sample MFS volume.
+- [Mini vMac blank disk images](https://www.gryphel.com/c/minivmac/extras/blanks/)
+  (gryphel.com) — Apple-formatted blank 400K/800K volumes, used as the `mkfs`
+  oracle.
+- [earlymacintosh.org](https://www.earlymacintosh.org/disk_images.html) —
+  Finder 1.0, System 1.1, and System 2.0 boot disks.
+
 ## License
 
 Licensed under either of
