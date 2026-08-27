@@ -54,7 +54,6 @@ mod macroman;
 mod mdb;
 mod mkfs;
 mod timestamp;
-mod util;
 mod volume;
 
 pub use error::{MfsError, Result};

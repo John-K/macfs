@@ -24,7 +24,6 @@ use crate::macroman;
 use crate::mdb::{HFS_SIGNATURE, MDB_LEN, MFS_SIGNATURE, Mdb};
 use crate::mkfs;
 use crate::timestamp::MacTimestamp;
-use crate::util::rd_u16;
 
 /// Bytes of boot code at the very start of a volume: logical sectors 0 and 1.
 const BOOT_BLOCKS_LEN: usize = 2 * SECTOR;
@@ -778,16 +777,21 @@ impl MfsVolume {
     }
 }
 
+/// The would-be `drSigWord` of a bare sector image, if `bytes` is big enough
+/// to hold an MDB at all.
+fn raw_signature(bytes: &[u8]) -> Option<u16> {
+    (bytes.len() >= MDB_OFFSET + MDB_LEN)
+        .then(|| u16::from_be_bytes([bytes[MDB_OFFSET], bytes[MDB_OFFSET + 1]]))
+}
+
 /// Whether `bytes` could be a bare MFS sector image.
 fn looks_like_raw(bytes: &[u8]) -> bool {
-    bytes.len() >= MDB_OFFSET + MDB_LEN
-        && bytes.len().is_multiple_of(SECTOR)
-        && rd_u16(bytes, MDB_OFFSET) == MFS_SIGNATURE
+    bytes.len().is_multiple_of(SECTOR) && raw_signature(bytes) == Some(MFS_SIGNATURE)
 }
 
 /// Whether `bytes` looks like a bare HFS sector image (reported as unsupported).
 fn looks_like_raw_hfs(bytes: &[u8]) -> bool {
-    bytes.len() >= MDB_OFFSET + MDB_LEN && rd_u16(bytes, MDB_OFFSET) == HFS_SIGNATURE
+    raw_signature(bytes) == Some(HFS_SIGNATURE)
 }
 
 fn read_all<R: Read + Seek>(mut r: R) -> Result<Vec<u8>> {
