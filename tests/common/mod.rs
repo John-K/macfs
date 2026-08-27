@@ -83,13 +83,20 @@ pub fn crc32(data: &[u8]) -> u32 {
 ///
 /// The real images are Apple-copyrighted and never committed, so every golden
 /// test early-returns when its image is absent and the suite stays green on a
-/// fresh clone.
+/// fresh clone. Set `MACFS_REQUIRE_GOLDEN=1` to turn a missing image into a
+/// test failure instead — for CI, or any run that must prove the golden tests
+/// actually executed rather than silently skipped.
 pub fn image_path(name: &str) -> Option<PathBuf> {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("tests/images")
         .join(name);
     if path.is_file() {
         Some(path)
+    } else if std::env::var_os("MACFS_REQUIRE_GOLDEN").is_some_and(|v| v != "0" && !v.is_empty()) {
+        panic!(
+            "MACFS_REQUIRE_GOLDEN is set but tests/images/{name} is not present — \
+             run scripts/fetch-test-images.sh"
+        );
     } else {
         eprintln!("skipping: tests/images/{name} not present — run scripts/fetch-test-images.sh");
         None
@@ -128,5 +135,10 @@ fn random_bytes_are_deterministic_and_the_right_length() {
 
 #[test]
 fn image_path_reports_a_missing_image_instead_of_failing() {
+    // Under MACFS_REQUIRE_GOLDEN a missing image panics by design, so the
+    // skip behavior this test pins doesn't exist to be tested.
+    if std::env::var_os("MACFS_REQUIRE_GOLDEN").is_some() {
+        return;
+    }
     assert!(image_path("no-such-image-9e3779b9.image").is_none());
 }

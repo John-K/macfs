@@ -778,16 +778,20 @@ impl MfsVolume {
     }
 }
 
+/// The would-be `drSigWord` of a bare sector image, if `bytes` is big enough
+/// to hold an MDB at all.
+fn raw_signature(bytes: &[u8]) -> Option<u16> {
+    (bytes.len() >= MDB_OFFSET + MDB_LEN).then(|| rd_u16(bytes, MDB_OFFSET))
+}
+
 /// Whether `bytes` could be a bare MFS sector image.
 fn looks_like_raw(bytes: &[u8]) -> bool {
-    bytes.len() >= MDB_OFFSET + MDB_LEN
-        && bytes.len().is_multiple_of(SECTOR)
-        && rd_u16(bytes, MDB_OFFSET) == MFS_SIGNATURE
+    bytes.len().is_multiple_of(SECTOR) && raw_signature(bytes) == Some(MFS_SIGNATURE)
 }
 
 /// Whether `bytes` looks like a bare HFS sector image (reported as unsupported).
 fn looks_like_raw_hfs(bytes: &[u8]) -> bool {
-    bytes.len() >= MDB_OFFSET + MDB_LEN && rd_u16(bytes, MDB_OFFSET) == HFS_SIGNATURE
+    raw_signature(bytes) == Some(HFS_SIGNATURE)
 }
 
 fn read_all<R: Read + Seek>(mut r: R) -> Result<Vec<u8>> {

@@ -50,23 +50,40 @@ const FLAG_LOCKED: u8 = 0x01;
 /// `fldr_num`) — is kept verbatim so that open→save round-trips byte-identically.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct RawEntry {
+    /// `flFlags` @0 — bit 7 in use, bit 0 locked.
     pub flags: u8,
+    /// `flVersion` @1 — always zero in practice. Stored verbatim.
     pub version: u8,
+    /// `flTyp` @2 — Finder type code.
     pub type_code: [u8; 4],
+    /// `flCr` @6 — Finder creator code.
     pub creator: [u8; 4],
+    /// `flFndrFlags` @10 — Finder flags.
     pub fndr_flags: u16,
+    /// `flPos` @12 — Finder icon position. Stored verbatim.
     pub pos: u32,
+    /// `flFldrNum` @16 — Finder folder number. Stored verbatim.
     pub fldr_num: u16,
+    /// `flFNum` @18 — file number.
     pub fnum: u32,
+    /// `flDFStBlk` @22 — first allocation block of the data fork.
     pub df_st_blk: u16,
+    /// `flDFLogLen` @24 — data fork logical length in bytes.
     pub df_log_len: u32,
+    /// `flDFAllocLen` @28 — data fork allocated length in bytes.
     pub df_alloc_len: u32,
+    /// `flRFStBlk` @32 — first allocation block of the resource fork.
     pub rf_st_blk: u16,
+    /// `flRFLogLen` @34 — resource fork logical length in bytes.
     pub rf_log_len: u32,
+    /// `flRFAllocLen` @38 — resource fork allocated length in bytes.
     pub rf_alloc_len: u32,
+    /// `flCrDat` @42 — creation date (1904 epoch).
     pub cr_dat: u32,
+    /// `flMdDat` @46 — last modification date (1904 epoch).
     pub md_dat: u32,
-    /// Raw MacRoman name bytes, without the leading Pascal length byte.
+    /// Raw MacRoman name bytes @51, without the leading Pascal length byte
+    /// (@50, derived from `name.len()` when writing).
     pub name: Vec<u8>,
 }
 

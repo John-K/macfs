@@ -23,7 +23,7 @@
 //! module preserves them verbatim so that an open/save cycle is byte-identical.
 
 use crate::error::{MfsError, Result};
-use crate::util::{rd_u32, wr_u32};
+use crate::util::{rd_u16, rd_u32, wr_u16, wr_u32};
 
 /// Size of the DiskCopy 4.2 header that precedes the disk data.
 pub(crate) const HEADER_LEN: usize = 84;
@@ -39,6 +39,9 @@ const OFF_TAG_CKSUM: usize = 76;
 const OFF_DISK_FORMAT: usize = 80;
 const OFF_FORMAT_BYTE: usize = 81;
 const OFF_MAGIC: usize = 82;
+
+/// The header magic word stored at [`OFF_MAGIC`].
+const MAGIC: u16 = 0x0100;
 
 /// The number of leading tag bytes excluded from `tagChecksum`.
 ///
@@ -117,11 +120,10 @@ fn validate_header(bytes: &[u8]) -> std::result::Result<(usize, usize), String> 
             bytes.len()
         ));
     }
-    if bytes[OFF_MAGIC] != 0x01 || bytes[OFF_MAGIC + 1] != 0x00 {
+    let magic = rd_u16(bytes, OFF_MAGIC);
+    if magic != MAGIC {
         return Err(format!(
-            "bad magic {:#04x}{:02x} at offset {OFF_MAGIC} (expected 0x0100)",
-            bytes[OFF_MAGIC],
-            bytes[OFF_MAGIC + 1]
+            "bad magic {magic:#06x} at offset {OFF_MAGIC} (expected 0x0100)"
         ));
     }
     let name_len = bytes[0] as usize;
@@ -204,8 +206,7 @@ impl Dc42Image {
         wr_u32(&mut out, OFF_TAG_CKSUM, tag_checksum(&self.tags));
         out[OFF_DISK_FORMAT] = self.disk_format;
         out[OFF_FORMAT_BYTE] = self.format_byte;
-        out[OFF_MAGIC] = 0x01;
-        out[OFF_MAGIC + 1] = 0x00;
+        wr_u16(&mut out, OFF_MAGIC, MAGIC);
 
         out.extend_from_slice(&self.data);
         out.extend_from_slice(&self.tags);
