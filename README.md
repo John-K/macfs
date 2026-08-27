@@ -1,5 +1,9 @@
 # macfs
 
+[![crates.io](https://img.shields.io/crates/v/macfs.svg)](https://crates.io/crates/macfs)
+[![docs.rs](https://docs.rs/macfs/badge.svg)](https://docs.rs/macfs)
+[![license](https://img.shields.io/crates/l/macfs.svg)](#license)
+
 Read and write MFS (Macintosh File System) floppy disk images — the flat
 filesystem the original 1984 Macintosh used on its 400K single-sided floppies —
 with no dependencies beyond `std`.
