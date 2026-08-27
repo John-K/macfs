@@ -11,6 +11,10 @@ use crate::util::{rd_u16, rd_u32, wr_u16, wr_u32};
 /// `drSigWord` — the value that marks a volume as MFS.
 pub(crate) const MFS_SIGNATURE: u16 = 0xD2D7;
 
+/// `drSigWord` of an HFS volume ("BD"), whose MDB sits at the same offset.
+/// Recognized only so HFS images can be reported as unsupported.
+pub(crate) const HFS_SIGNATURE: u16 = 0x4244;
+
 /// Serialized size of the MDB proper (the allocation block map starts right after).
 pub(crate) const MDB_LEN: usize = 64;
 
@@ -65,6 +69,9 @@ impl Mdb {
         }
 
         let sig_word = rd_u16(region, 0);
+        if sig_word == HFS_SIGNATURE {
+            return Err(MfsError::UnsupportedHfs);
+        }
         if sig_word != MFS_SIGNATURE {
             return Err(MfsError::BadSignature { found: sig_word });
         }
@@ -236,11 +243,18 @@ mod tests {
     #[test]
     fn rejects_bad_signature() {
         let mut b = sample_bytes();
-        b[0..2].copy_from_slice(&0x4244u16.to_be_bytes()); // HFS
+        b[0..2].copy_from_slice(&0xBEEFu16.to_be_bytes());
         match Mdb::parse(&b) {
-            Err(MfsError::BadSignature { found }) => assert_eq!(found, 0x4244),
+            Err(MfsError::BadSignature { found }) => assert_eq!(found, 0xBEEF),
             other => panic!("expected BadSignature, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn hfs_signature_is_unsupported() {
+        let mut b = sample_bytes();
+        b[0..2].copy_from_slice(&HFS_SIGNATURE.to_be_bytes());
+        assert!(matches!(Mdb::parse(&b), Err(MfsError::UnsupportedHfs)));
     }
 
     #[test]

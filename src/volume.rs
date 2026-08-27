@@ -21,7 +21,7 @@ use crate::dc42::Dc42Image;
 use crate::dir::{self, RawEntry, SECTOR};
 use crate::error::{MfsError, Result};
 use crate::macroman;
-use crate::mdb::{MDB_LEN, MFS_SIGNATURE, Mdb};
+use crate::mdb::{HFS_SIGNATURE, MDB_LEN, MFS_SIGNATURE, Mdb};
 use crate::mkfs;
 use crate::timestamp::MacTimestamp;
 use crate::util::rd_u16;
@@ -218,6 +218,7 @@ impl MfsVolume {
             Some(f) => f,
             None if Dc42Image::detect(&bytes) => ImageFormat::DiskCopy42,
             None if looks_like_raw(&bytes) => ImageFormat::Raw,
+            None if looks_like_raw_hfs(&bytes) => return Err(MfsError::UnsupportedHfs),
             None => return Err(MfsError::UnknownImageFormat),
         };
         match format {
@@ -784,6 +785,11 @@ fn looks_like_raw(bytes: &[u8]) -> bool {
         && rd_u16(bytes, MDB_OFFSET) == MFS_SIGNATURE
 }
 
+/// Whether `bytes` looks like a bare HFS sector image (reported as unsupported).
+fn looks_like_raw_hfs(bytes: &[u8]) -> bool {
+    bytes.len() >= MDB_OFFSET + MDB_LEN && rd_u16(bytes, MDB_OFFSET) == HFS_SIGNATURE
+}
+
 fn read_all<R: Read + Seek>(mut r: R) -> Result<Vec<u8>> {
     r.seek(SeekFrom::Start(0))?;
     let mut bytes = Vec::new();
@@ -1235,18 +1241,34 @@ mod tests {
             MfsVolume::open(Cursor::new(Vec::new())),
             Err(MfsError::UnknownImageFormat)
         ));
-        // An HFS volume: right shape, wrong signature.
+    }
+
+    #[test]
+    fn hfs_images_are_reported_unsupported() {
+        // A raw HFS volume: MFS's MDB offset holds HFS's signature.
         let mut hfs = vec![0u8; 409_600];
         hfs[1024] = 0x42;
         hfs[1025] = 0x44;
         assert!(matches!(
             MfsVolume::open(Cursor::new(hfs.clone())),
-            Err(MfsError::UnknownImageFormat)
+            Err(MfsError::UnsupportedHfs)
         ));
-        // Naming the format gets the more specific error.
+        // Forcing the raw format reaches the same verdict via the MDB parse.
         assert!(matches!(
             MfsVolume::open_with_format(Cursor::new(hfs), ImageFormat::Raw),
-            Err(MfsError::BadSignature { found: 0x4244 })
+            Err(MfsError::UnsupportedHfs)
+        ));
+
+        // A DiskCopy 4.2 container wrapping an HFS volume.
+        let mut data = vec![0u8; 409_600];
+        data[1024] = 0x42;
+        data[1025] = 0x44;
+        let dc_bytes = crate::dc42::Dc42Image::new_blank(b"HFS Disk", data)
+            .unwrap()
+            .to_bytes();
+        assert!(matches!(
+            MfsVolume::open(Cursor::new(dc_bytes)),
+            Err(MfsError::UnsupportedHfs)
         ));
     }
 

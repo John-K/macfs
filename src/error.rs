@@ -6,6 +6,8 @@ pub enum MfsError {
     Io(std::io::Error),
     /// The volume signature word (`drSigWord`) was not 0xD2D7.
     BadSignature { found: u16 },
+    /// The volume is HFS (`drSigWord` 0x4244), which this crate does not support.
+    UnsupportedHfs,
     /// Neither a raw MFS image nor a DiskCopy 4.2 container was recognized.
     UnknownImageFormat,
     /// The DiskCopy 4.2 container is malformed (bad magic, size, or checksum).
@@ -35,6 +37,9 @@ impl fmt::Display for MfsError {
             MfsError::Io(e) => write!(f, "I/O error: {e}"),
             MfsError::BadSignature { found } => {
                 write!(f, "not an MFS volume: signature {found:#06x} (expected 0xd2d7)")
+            }
+            MfsError::UnsupportedHfs => {
+                write!(f, "HFS volume detected (signature 0x4244): HFS is not supported")
             }
             MfsError::UnknownImageFormat => {
                 write!(f, "unrecognized image: neither raw MFS nor DiskCopy 4.2")
