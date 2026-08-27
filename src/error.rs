@@ -76,4 +76,16 @@ impl From<std::io::Error> for MfsError {
     }
 }
 
+impl From<binrw::Error> for MfsError {
+    /// Backstop for the declarative layout readers/writers. Semantic validation
+    /// lives in the wrappers around them, so in practice only genuine I/O
+    /// failures (a short buffer) reach this conversion.
+    fn from(e: binrw::Error) -> Self {
+        match e {
+            binrw::Error::Io(io) => MfsError::Io(io),
+            other => MfsError::CorruptVolume(other.to_string()),
+        }
+    }
+}
+
 pub type Result<T> = std::result::Result<T, MfsError>;

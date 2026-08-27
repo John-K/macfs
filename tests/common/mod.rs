@@ -1,6 +1,6 @@
 //! Shared helpers for the black-box integration suites.
 //!
-//! `macfs` has no dependencies and neither do its tests, so the pseudo-random
+//! The tests pull in no dependencies of their own, so the pseudo-random
 //! generator and the CRC-32 used to fingerprint fork contents are hand-rolled
 //! here. Both are deterministic: a test that fails once fails the same way
 //! forever.

@@ -221,7 +221,7 @@ impl BlockMap {
 mod tests {
     use super::*;
 
-    /// Tiny xorshift32 so the tests need no dependencies.
+    /// Tiny xorshift32 so the tests pull in no extra dependencies.
     struct Rng(u32);
     impl Rng {
         fn next(&mut self) -> u32 {

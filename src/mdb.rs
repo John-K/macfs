@@ -6,7 +6,8 @@
 //! [`crate::blockmap`].
 
 use crate::error::{MfsError, Result};
-use crate::util::{rd_u16, rd_u32, wr_u16, wr_u32};
+use binrw::{BinRead, BinWrite, binrw};
+use std::io::Cursor;
 
 /// `drSigWord` — the value that marks a volume as MFS.
 pub(crate) const MFS_SIGNATURE: u16 = 0xD2D7;
@@ -19,6 +20,14 @@ pub(crate) const HFS_SIGNATURE: u16 = 0x4244;
 pub(crate) const MDB_LEN: usize = 64;
 
 /// The Master Directory Block, field-for-field as stored on disk.
+///
+/// The declaration below *is* the layout: fields appear in on-disk order and
+/// [`binrw`] reads and writes them big-endian, so the documented offsets are a
+/// consequence of the field order rather than something maintained by hand.
+/// Semantic validation is deliberately not expressed as `assert` attributes —
+/// it lives in [`Mdb::parse`], where its ordering and messages stay explicit.
+#[binrw]
+#[brw(big)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Mdb {
     /// `drSigWord` @0 — always [`MFS_SIGNATURE`].
@@ -68,36 +77,39 @@ impl Mdb {
             )));
         }
 
-        let sig_word = rd_u16(region, 0);
-        if sig_word == HFS_SIGNATURE {
+        // The region usually runs on into the allocation block map; only the
+        // first MDB_LEN bytes belong to the MDB.
+        let mdb = Mdb::read(&mut Cursor::new(&region[..MDB_LEN]))?;
+
+        if mdb.sig_word == HFS_SIGNATURE {
             return Err(MfsError::UnsupportedHfs);
         }
-        if sig_word != MFS_SIGNATURE {
-            return Err(MfsError::BadSignature { found: sig_word });
+        if mdb.sig_word != MFS_SIGNATURE {
+            return Err(MfsError::BadSignature { found: mdb.sig_word });
         }
 
-        let al_blk_siz = rd_u32(region, 20);
+        let al_blk_siz = mdb.al_blk_siz;
         if al_blk_siz == 0 || !al_blk_siz.is_multiple_of(512) {
             return Err(MfsError::CorruptVolume(format!(
                 "drAlBlkSiz is {al_blk_siz}, expected a nonzero multiple of 512"
             )));
         }
 
-        let dir_st = rd_u16(region, 14);
+        let dir_st = mdb.dir_st;
         if dir_st < 3 {
             return Err(MfsError::CorruptVolume(format!(
                 "drDirSt is {dir_st}, expected at least 3 (boot blocks + MDB)"
             )));
         }
 
-        let dir_len = rd_u16(region, 16);
+        let dir_len = mdb.dir_len;
         if dir_len < 1 {
             return Err(MfsError::CorruptVolume(
                 "drDirLen is 0, expected at least 1 sector".to_string(),
             ));
         }
 
-        let al_bl_st = rd_u16(region, 28);
+        let al_bl_st = mdb.al_bl_st;
         // dir_st and dir_len are u16; widen so the sum cannot wrap.
         let dir_end = dir_st as u32 + dir_len as u32;
         if (al_bl_st as u32) < dir_end {
@@ -107,31 +119,14 @@ impl Mdb {
             )));
         }
 
-        let mut name_raw = [0u8; 28];
-        name_raw.copy_from_slice(&region[36..64]);
-        if name_raw[0] > 27 {
+        if mdb.name_raw[0] > 27 {
             return Err(MfsError::CorruptVolume(format!(
                 "volume name length byte is {}, maximum is 27",
-                name_raw[0]
+                mdb.name_raw[0]
             )));
         }
 
-        Ok(Mdb {
-            sig_word,
-            cr_date: rd_u32(region, 2),
-            ls_mod: rd_u32(region, 6),
-            atrb: rd_u16(region, 10),
-            nm_fls: rd_u16(region, 12),
-            dir_st,
-            dir_len,
-            nm_al_blks: rd_u16(region, 18),
-            al_blk_siz,
-            clp_siz: rd_u32(region, 24),
-            al_bl_st,
-            nxt_fnum: rd_u32(region, 30),
-            free_bks: rd_u16(region, 34),
-            name_raw,
-        })
+        Ok(mdb)
     }
 
     /// Serialize the MDB into the first 64 bytes of `out` — the exact inverse
@@ -145,20 +140,10 @@ impl Mdb {
             out.len() >= MDB_LEN,
             "MDB output region must be at least {MDB_LEN} bytes"
         );
-        wr_u16(out, 0, self.sig_word);
-        wr_u32(out, 2, self.cr_date);
-        wr_u32(out, 6, self.ls_mod);
-        wr_u16(out, 10, self.atrb);
-        wr_u16(out, 12, self.nm_fls);
-        wr_u16(out, 14, self.dir_st);
-        wr_u16(out, 16, self.dir_len);
-        wr_u16(out, 18, self.nm_al_blks);
-        wr_u32(out, 20, self.al_blk_siz);
-        wr_u32(out, 24, self.clp_siz);
-        wr_u16(out, 28, self.al_bl_st);
-        wr_u32(out, 30, self.nxt_fnum);
-        wr_u16(out, 34, self.free_bks);
-        out[36..64].copy_from_slice(&self.name_raw);
+        // Bounded to MDB_LEN so a larger caller buffer keeps everything past
+        // the MDB (the allocation block map) untouched.
+        self.write(&mut Cursor::new(&mut out[..MDB_LEN]))
+            .expect("the MDB is exactly MDB_LEN bytes, so this write cannot fail");
     }
 }
 

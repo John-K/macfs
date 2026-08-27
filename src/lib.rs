@@ -3,8 +3,9 @@
 //! MFS is the flat filesystem the original 1984 Macintosh used on its 400K
 //! single-sided floppies. This crate reads and writes those volumes — as bare
 //! sector images or inside a [DiskCopy 4.2][ImageFormat::DiskCopy42] container,
-//! autodetected on open and written back in the same shape — with no
-//! dependencies beyond `std`.
+//! autodetected on open and written back in the same shape. On-disk structure
+//! layouts are described declaratively with [binrw](https://docs.rs/binrw),
+//! which is the crate's only dependency.
 //!
 //! Volumes are handled whole: [`MfsVolume::open`] pulls the entire image into
 //! memory, every operation works on that copy, and one [`MfsVolume::save_to`]
