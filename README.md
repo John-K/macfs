@@ -14,21 +14,23 @@ detected and reported as unsupported.
 ## Library
 
 ```rust
-use macfs::{Fork, ImageFormat, MfsVolume};
+use macfs::{Fork, ImageFormat, MfsVolume, Result};
 use std::io::Cursor;
 
-// Format a blank 400K volume in memory and put a file on it.
-let mut vol = MfsVolume::format(MfsVolume::FLOPPY_400K, "My Disk", ImageFormat::Raw)?;
-vol.create_file("Read Me", *b"TEXT", *b"MACA")?;
-vol.write_fork("Read Me", Fork::Data, b"hello from 1984")?;
+fn main() -> Result<()> {
+    // Format a blank 400K volume in memory and put a file on it.
+    let mut vol = MfsVolume::format(MfsVolume::FLOPPY_400K, "My Disk", ImageFormat::Raw)?;
+    vol.create_file("Read Me", *b"TEXT", *b"MACA")?;
+    vol.write_fork("Read Me", Fork::Data, b"hello from 1984")?;
 
-let mut image = Cursor::new(Vec::new());
-vol.save_to(&mut image)?;
+    let mut image = Cursor::new(Vec::new());
+    vol.save_to(&mut image)?;
 
-// Read it back. Name lookup is case-insensitive, as on a real Mac.
-let disk = MfsVolume::open(Cursor::new(image.into_inner()))?;
-assert_eq!(disk.read_fork("read me", Fork::Data)?, b"hello from 1984");
-# Ok::<(), macfs::MfsError>(())
+    // Read it back. Name lookup is case-insensitive, as on a real Mac.
+    let disk = MfsVolume::open(Cursor::new(image.into_inner()))?;
+    assert_eq!(disk.read_fork("read me", Fork::Data)?, b"hello from 1984");
+    Ok(())
+}
 ```
 
 Volumes are handled whole: `open` pulls the entire image into memory, every
