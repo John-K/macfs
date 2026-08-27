@@ -2,7 +2,13 @@
 name = "macfs"
 version = "0.1.0"
 edition = "2024"
+rust-version = "1.87"
 description = "Read/write MFS (Macintosh File System) 400K/800K disk images, raw or DiskCopy 4.2"
 license = "MIT OR Apache-2.0"
+readme = "README.md"
+documentation = "https://docs.rs/macfs"
+keywords = ["mfs", "macintosh", "disk-image", "diskcopy", "retrocomputing"]
+categories = ["filesystem", "parser-implementations", "emulators", "command-line-utilities"]
+exclude = ["tests/images/", ".claude/", ".rtk/", "CLAUDE.md"]
 
 [dependencies]
